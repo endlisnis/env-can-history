@@ -1,5 +1,6 @@
+#!/usr/bin/env python3.8
+
 import csv
-import dailyStations
 import dataclasses
 import datetime as dt
 import lzma
@@ -10,12 +11,38 @@ import threading
 import time as timelib
 
 from concurrent.futures import ThreadPoolExecutor
-pool = ThreadPoolExecutor(max_workers=40)
+
+
+@dataclasses.dataclass
+class InventoryStation:
+    name: str
+    province: str
+    climateId: str
+    stationId: int
+    wmoId: int
+    tcId: str
+    latitudeDecimalDegrees: float
+    longitudeDecimalDegrees: float
+    latitude: int
+    longitude: int
+    elevation: float
+    firstYear: int
+    lastYear: int
+    hlyFirstYear: int
+    hlyLastYear: int
+    dlyFirstYear: int
+    dlyLastYear: int
+    mlyFirstYear: int
+    mlyLastYear: int
+
+pool = ThreadPoolExecutor(max_workers=8)
 futures = []
 
 class LocalSession(threading.local):
     def __init__(self):
+        super().__init__()
         self.session = requests.Session()
+
 threadLocal = LocalSession()
 stationRefresh = sqlitedict.SqliteDict('StationRefresh.db', autocommit=True)
 
@@ -29,6 +56,22 @@ def getOneFile(url, dirname, localPath):
     stationRefresh[localPath] = timelib.time()
     # print('done')
 
+
+def calcRefresh(year, lastRefresh):
+    today = dt.date.today()
+    threeDaysAgo = today - dt.timedelta(days=3)
+    if year == today.year or year == threeDaysAgo.year:
+        if timelib.time() - lastRefresh > 3600:
+            # It's the last 3 days, refresh once per hour
+            return True
+    elif year == today.year - 1:
+        if timelib.time() - lastRefresh > 3600*24*30:
+            # It's last year, refresh once per month
+            return True
+    elif timelib.time() - lastRefresh > 3600*24*365:
+        # Refresh at least once per year
+        return True
+    return False
 
 def main():
     csvData = ( open('Station Inventory EN.csv')
@@ -48,13 +91,13 @@ def main():
             continue
         if len(tokens) == 0:
             continue
-        fields = dataclasses.fields(dailyStations.InventoryStation)
+        fields = dataclasses.fields(InventoryStation)
         for i, field in enumerate(fields):
             if len(tokens[i]) == 0:
                 tokens[i] = None
             else:
                 tokens[i] = field.type(tokens[i])
-        station = dailyStations.InventoryStation(*tokens)
+        station = InventoryStation(*tokens)
         if station.dlyLastYear == 2020:
             dirname = f'stations/{station.stationId//1000}/{station.stationId}'
             # print(f'{station.name.title()}: {dirname}: {station.dlyFirstYear}-{station.dlyLastYear}')
@@ -62,20 +105,7 @@ def main():
                 fname = f'{dirname}/{year}.csv.xz'
                 refresh = False
                 lastRefresh = stationRefresh.get(fname, 0)
-                today = dt.date.today()
-                threeDaysAgo = today - dt.timedelta(days=3)
-                if year == today.year or year == threeDaysAgo.year:
-                    if timelib.time() - lastRefresh > 3600:
-                        # It's the last 3 days, refresh once per hour
-                        refresh = True
-                elif year == today.year - 1:
-                    if timelib.time() - lastRefresh > 3600*24*30:
-                        # It's last year, refresh once per month
-                        refresh = True
-                elif timelib.time() - lastRefresh > 3600*24*365:
-                    # Refresh at least once per year
-                    refresh = True
-                if refresh is False:
+                if calcRefresh(year, lastRefresh) is False:
                     continue
                 url = ( f'http://climate.weather.gc.ca/climate_data/bulk_data_e.html'
                         f'?format=csv&stationID={station.stationId}&Year={year}&Month=1&Day=1'

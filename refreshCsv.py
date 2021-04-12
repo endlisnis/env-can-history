@@ -1,5 +1,6 @@
 #!/usr/bin/env python3.8
 
+import argparse
 import csv
 import dataclasses
 import datetime as dt
@@ -73,8 +74,8 @@ def calcRefresh(year, lastRefresh):
         return True
     return False
 
-def main():
-    csvData = ( open('Station Inventory EN.csv')
+def update(args):
+    csvData = ( open(args.station_inventory)
                 .read()
                 .split('\n') )
     while not csvData[0].startswith('"Name"'):
@@ -84,9 +85,10 @@ def main():
         if rowIndex == 0:
             expectedHeader = [
                 "Name", "Province", "Climate ID", "Station ID", "WMO ID", "TC ID",
-                "Latitude (Decimal Degrees)", "Longitude (Decimal Degrees)", "Latitude",
-                "Longitude", "Elevation (m)", "First Year", "Last Year", "HLY First Year",
-                "HLY Last Year", "DLY First Year", "DLY Last Year", "MLY First Year", "MLY Last Year"]
+                "Latitude (Decimal Degrees)", "Longitude (Decimal Degrees)",
+                "Latitude", "Longitude", "Elevation (m)", "First Year",
+                "Last Year", "HLY First Year", "HLY Last Year", "DLY First Year",
+                "DLY Last Year", "MLY First Year", "MLY Last Year" ]
             assert tokens == expectedHeader
             continue
         if len(tokens) == 0:
@@ -98,21 +100,32 @@ def main():
             else:
                 tokens[i] = field.type(tokens[i])
         station = InventoryStation(*tokens)
-        if station.dlyLastYear == 2020:
+        if station.dlyLastYear == dt.date.today().year:
             dirname = f'stations/{station.stationId//1000}/{station.stationId}'
             # print(f'{station.name.title()}: {dirname}: {station.dlyFirstYear}-{station.dlyLastYear}')
             for year in range(station.dlyFirstYear, station.dlyLastYear+1):
                 fname = f'{dirname}/{year}.csv.xz'
-                refresh = False
-                lastRefresh = stationRefresh.get(fname, 0)
-                if calcRefresh(year, lastRefresh) is False:
-                    continue
-                url = ( f'http://climate.weather.gc.ca/climate_data/bulk_data_e.html'
-                        f'?format=csv&stationID={station.stationId}&Year={year}&Month=1&Day=1'
-                        f'&timeframe=2' )
+                if args.force is False:
+                    lastRefresh = stationRefresh.get(fname, 0)
+                    if calcRefresh(year, lastRefresh) is False:
+                        continue
+                url = (
+                    f'https://climate.weather.gc.ca/climate_data/bulk_data_e.html'
+                    f'?format=csv&stationID={station.stationId}&Year={year}'
+                    f'&Month=1&Day=1&timeframe=2' )
                 futures.append(pool.submit(getOneFile, url, dirname, fname))
     while len(futures):
         futures.pop(0).result()
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Download weather history from Environment Canada.')
+    parser.add_argument('--force', action='store_true',
+                        help='Redownload all data, regardless of age.')
+    parser.add_argument('--station-inventory', default='Station Inventory EN.csv',
+                        help='Where to read station data from.')
+    args = parser.parse_args()
+    update(args)
 
 
 if __name__=='__main__':

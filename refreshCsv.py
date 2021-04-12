@@ -36,6 +36,10 @@ class InventoryStation:
     mlyFirstYear: int
     mlyLastYear: int
 
+    def dailyYearsIter(self):
+        if self.dlyFirstYear is not None:
+            yield from range(self.dlyFirstYear, self.dlyLastYear+1)
+
 pool = ThreadPoolExecutor(max_workers=8)
 futures = []
 
@@ -74,14 +78,26 @@ def calcRefresh(year, lastRefresh):
         return True
     return False
 
-def update(args):
+def readCsvData(args):
     csvData = ( open(args.station_inventory)
                 .read()
                 .split('\n') )
     while not csvData[0].startswith('"Name"'):
         csvData.pop(0)
+    return csv.reader(csvData)
 
-    for rowIndex, tokens in enumerate(csv.reader(csvData)):
+def getStation(tokens):
+    fields = dataclasses.fields(InventoryStation)
+    for i, field in enumerate(fields):
+        if len(tokens[i]) == 0:
+            tokens[i] = None
+        else:
+            tokens[i] = field.type(tokens[i])
+    station = InventoryStation(*tokens)
+    return station
+
+def update(args):
+    for rowIndex, tokens in enumerate(readCsvData(args)):
         if rowIndex == 0:
             expectedHeader = [
                 "Name", "Province", "Climate ID", "Station ID", "WMO ID", "TC ID",
@@ -93,27 +109,20 @@ def update(args):
             continue
         if len(tokens) == 0:
             continue
-        fields = dataclasses.fields(InventoryStation)
-        for i, field in enumerate(fields):
-            if len(tokens[i]) == 0:
-                tokens[i] = None
-            else:
-                tokens[i] = field.type(tokens[i])
-        station = InventoryStation(*tokens)
-        if station.dlyLastYear == dt.date.today().year:
-            dirname = f'stations/{station.stationId//1000}/{station.stationId}'
-            # print(f'{station.name.title()}: {dirname}: {station.dlyFirstYear}-{station.dlyLastYear}')
-            for year in range(station.dlyFirstYear, station.dlyLastYear+1):
-                fname = f'{dirname}/{year}.csv.xz'
-                if args.force is False:
-                    lastRefresh = stationRefresh.get(fname, 0)
-                    if calcRefresh(year, lastRefresh) is False:
-                        continue
-                url = (
-                    f'https://climate.weather.gc.ca/climate_data/bulk_data_e.html'
-                    f'?format=csv&stationID={station.stationId}&Year={year}'
-                    f'&Month=1&Day=1&timeframe=2' )
-                futures.append(pool.submit(getOneFile, url, dirname, fname))
+        station = getStation(tokens)
+        dirname = f'stations/{station.stationId//1000}/{station.stationId}'
+        # print(f'{station.name.title()}: {dirname}: {station.dlyFirstYear}-{station.dlyLastYear}')
+        for year in station.dailyYearsIter():
+            fname = f'{dirname}/{year}.csv.xz'
+            if args.force is False:
+                lastRefresh = stationRefresh.get(fname, 0)
+                if calcRefresh(year, lastRefresh) is False:
+                    continue
+            url = (
+                f'https://climate.weather.gc.ca/climate_data/bulk_data_e.html'
+                f'?format=csv&stationID={station.stationId}&Year={year}'
+                f'&Month=1&Day=1&timeframe=2' )
+            futures.append(pool.submit(getOneFile, url, dirname, fname))
     while len(futures):
         futures.pop(0).result()
 
